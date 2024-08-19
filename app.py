@@ -6,8 +6,7 @@ from collections import defaultdict
 from typing import Dict, List
 
 import pandas as pd
-from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
-                     UploadFile)
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
 
@@ -144,13 +143,47 @@ async def search(query: str, k: int = 5):
 
     # Semantic search
     query_vector = embedder.embed(query)
+
     semantic_matches = vec_db.find_closest(query_vector, k)
 
-    # Formatting the response
-    semantic_results = [
-        {"name": match.payload["name"], "score": match.score}
-        for match in semantic_matches
+    tags_has_synonym_lists: List[List[str]] = [
+        app.tag_synonyms[m.payload["name"]]
+        for m in semantic_matches
+        if m.payload["name"] in app.tag_synonyms
     ]
+
+    tags_has_synonym: List[str] = []
+
+    for tag_list in tags_has_synonym_lists:
+        tags_has_synonym += tag_list
+
+    query_vecs_has_synonyms = [embedder.embed(query) for query in tags_has_synonym]
+
+    syn_sem_matches_lists = [
+        vec_db.find_closest(tag, k) for tag in query_vecs_has_synonyms
+    ]
+
+    syn_sem_matches = []
+    for matches in syn_sem_matches_lists:
+        syn_sem_matches += matches
+
+    syn_sem_matches = [
+        (match.payload["name"], match.score) for match in syn_sem_matches
+    ]
+
+    syn_sem_matches.sort(key=lambda t: t[1], reverse=True)
+
+    result = []
+    seen = set()
+
+    for tpl in syn_sem_matches:
+        if tpl[0] not in seen:
+            result.append(tpl)
+            seen.add(tpl[0])
+
+    # Formatting the response
+    semantic_results = [{"name": match[0], "score": match[1]} for match in result]
+
     typo_results = [
         {"name": match["matched"], "score": match["score"]} for match in fuzzy_matches
     ]
