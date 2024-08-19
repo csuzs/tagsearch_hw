@@ -3,13 +3,13 @@ import logging
 import os
 import threading
 from typing import List
-
+import pickle
 import pandas as pd
 from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
                      UploadFile)
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
-
+from sklearn.decomposition import PCA
 from tagmatch.fuzzysearcher import FuzzyMatcher
 from tagmatch.logging_config import setup_logging
 from tagmatch.vec_db import Embedder, VecDB
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     qdrant_host: str
     qdrant_port: int
     qdrant_collection: str
+    reduced_embed_dim: int
 
     class Config:
         env_file = ".env"
@@ -40,10 +41,12 @@ app.names_storage: List[str] = []
 
 # Placeholder for the semantic search components
 embedder = Embedder(model_name=settings.model_name, cache_dir=settings.cache_dir)
+pca: PCA = pickle.load(open("pca.pkl","rb"))
+
 vec_db = VecDB(host=settings.qdrant_host,
                port=settings.qdrant_port,
                collection=settings.qdrant_collection,
-               vector_size=embedder.embedding_dim)
+               vector_size=settings.reduced_embed_dim)
 app.fuzzy_matcher = FuzzyMatcher([])
 
 # Flag to track background task status
@@ -103,7 +106,8 @@ def process_csv(names_storage: List[str]):
         # Store embedded vectors for semantic search
         for name in names_storage:
             vector = embedder.embed(name)
-            vec_db.store(vector, {"name": name})
+            reduced_vector = pca.transform(vector)
+            vec_db.store(reduced_vector, {"name": name})
 
         app.names_storage = names_storage
         app.fuzzy_matcher = FuzzyMatcher(app.names_storage)
@@ -126,10 +130,11 @@ async def search(query: str, k: int = 5):
 
     # Fuzzy search
     fuzzy_matches = app.fuzzy_matcher.get_top_k_matches(query, k)
-
     # Semantic search
+
     query_vector = embedder.embed(query)
-    semantic_matches = vec_db.find_closest(query_vector, k)
+    reduced_q_vector = pca.transform(list(query_vector)[0])
+    semantic_matches = vec_db.find_closest(reduced_q_vector, k)
 
     # Formatting the response
     semantic_results = [{"name": match.payload["name"], "score": match.score} for match in semantic_matches]
