@@ -1,9 +1,8 @@
 import io
 import logging
 import os
-import threading
-from typing import List
 import pickle
+import threading
 from collections import defaultdict
 from typing import List
 
@@ -13,6 +12,7 @@ from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
 from sklearn.decomposition import PCA
+
 from tagmatch.fuzzysearcher import FuzzyMatcher
 from tagmatch.logging_config import setup_logging
 from tagmatch.vec_db import Embedder, VecDB
@@ -45,12 +45,14 @@ app.tag_synonyms = defaultdict(set)
 
 # Placeholder for the semantic search components
 embedder = Embedder(model_name=settings.model_name, cache_dir=settings.cache_dir)
-pca: PCA = pickle.load(open("pca.pkl","rb"))
+pca: PCA = pickle.load(open("pca.pkl", "rb"))
 
-vec_db = VecDB(host=settings.qdrant_host,
-               port=settings.qdrant_port,
-               collection=settings.qdrant_collection,
-               vector_size=settings.reduced_embed_dim)
+vec_db = VecDB(
+    host=settings.qdrant_host,
+    port=settings.qdrant_port,
+    collection=settings.qdrant_collection,
+    vector_size=settings.reduced_embed_dim,
+)
 
 app.fuzzy_matcher = FuzzyMatcher([])
 
