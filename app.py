@@ -6,7 +6,8 @@ from collections import defaultdict
 from typing import Dict, List
 
 import pandas as pd
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
+                     UploadFile)
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
 
