@@ -15,3 +15,7 @@ In case of supervised dimension reduction techniques one should re-train the dim
 
 I didn't do the warmup task, as i did not have access to gpu when writing this homework.
 I was considering about adding a script that uses requests library and does load testing of the API, but the task specifically requested to measure difference of GPU/CPU, so i skipped this task. 
+
+repo is still private, Tasks.md didnt mention to put it to public, but i don't have the reviewer's github account name, so i can't invite them as collaborators to a private repository :(
+
+https://github.com/csuzs/tagsearch_hw
