@@ -2,11 +2,12 @@ import io
 import logging
 import os
 import threading
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from typing import List, Tuple
 
 import pandas as pd
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
+                     UploadFile)
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
 from sklearn.decomposition import PCA
@@ -58,6 +59,7 @@ app.fuzzy_matcher = FuzzyMatcher([])
 
 # Flag to track background task status
 task_running = threading.Event()
+MatchTuple = namedtuple("MatchTuple", ["name", "score"])
 
 
 @app.middleware("http")
@@ -152,15 +154,17 @@ async def search(query: str, k: int = 5):
     query_vector = pca(query)
 
     semantic_matches = vec_db.find_closest(query_vector, k)
-    semantic_matches: List[Tuple[str, float]] = [
-        (m.payload["name"], m.score) for m in semantic_matches
+    semantic_matches: List[MatchTuple] = [
+        MatchTuple(name=m.payload["name"], score=m.score) for m in semantic_matches
     ]
 
     tags_has_synonym_lists: List[List[str]] = [
-        app.tag_synonyms[m[0]] for m in semantic_matches if m[0] in app.tag_synonyms
+        app.tag_synonyms[m.name] for m in semantic_matches if m.name in app.tag_synonyms
     ]
 
-    semantic_matches = filter(lambda m: m[0] not in app.tag_synonyms, semantic_matches)
+    semantic_matches = filter(
+        lambda m: m.name not in app.tag_synonyms, semantic_matches
+    )
 
     tags_has_synonym: List[str] = []
 
@@ -177,23 +181,26 @@ async def search(query: str, k: int = 5):
     for matches in syn_sem_matches_lists:
         syn_sem_matches += matches
 
-    syn_sem_matches = [
-        (match.payload["name"], match.score) for match in syn_sem_matches
+    syn_sem_matches: List[MatchTuple] = [
+        MatchTuple(name=match.payload["name"], score=match.score)
+        for match in syn_sem_matches
     ]
 
     syn_sem_matches += semantic_matches
-    syn_sem_matches.sort(key=lambda t: t[1], reverse=True)
+    syn_sem_matches.sort(key=lambda t: t.score, reverse=True)
 
     result = []
     seen = set()
 
     for tpl in syn_sem_matches:
-        if tpl[0] not in seen:
+        if tpl.name not in seen:
             result.append(tpl)
-            seen.add(tpl[0])
+            seen.add(tpl.name)
 
     # Formatting the response
-    semantic_results = [{"name": match[0], "score": match[1]} for match in result[:k]]
+    semantic_results = [
+        {"name": match.name, "score": match.score} for match in result[:k]
+    ]
 
     typo_results = [
         {"name": match["matched"], "score": match["score"]} for match in fuzzy_matches
