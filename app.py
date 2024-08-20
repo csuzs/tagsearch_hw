@@ -3,7 +3,7 @@ import logging
 import os
 import threading
 from collections import defaultdict, namedtuple
-from typing import List, Tuple
+from typing import List
 
 import pandas as pd
 from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
