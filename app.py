@@ -2,18 +2,19 @@ import io
 import logging
 import os
 import threading
-from collections import defaultdict
-from typing import Dict, List
+from collections import defaultdict, namedtuple
+from typing import List, Tuple
 
 import pandas as pd
 from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
                      UploadFile)
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
+from sklearn.decomposition import PCA
 
 from tagmatch.fuzzysearcher import FuzzyMatcher
 from tagmatch.logging_config import setup_logging
-from tagmatch.vec_db import Embedder, VecDB
+from tagmatch.vec_db import Embedder, EmbedReduce, PCAEmbedReduce, VecDB
 
 if not os.path.exists("./data"):
     os.makedirs("./data")
@@ -27,6 +28,7 @@ class Settings(BaseSettings):
     qdrant_host: str
     qdrant_port: int
     qdrant_collection: str
+    reduced_embed_dim: int
 
     class Config:
         env_file = ".env"
@@ -42,16 +44,22 @@ app.tag_synonyms = defaultdict(set)
 
 # Placeholder for the semantic search components
 embedder = Embedder(model_name=settings.model_name, cache_dir=settings.cache_dir)
+
+embed = EmbedReduce(embedder=embedder)
+pca = PCAEmbedReduce(embedder=embedder, pca_pkl_path="pca.pkl")
+
 vec_db = VecDB(
     host=settings.qdrant_host,
     port=settings.qdrant_port,
     collection=settings.qdrant_collection,
-    vector_size=embedder.embedding_dim,
+    vector_size=settings.reduced_embed_dim,
 )
+
 app.fuzzy_matcher = FuzzyMatcher([])
 
 # Flag to track background task status
 task_running = threading.Event()
+MatchTuple = namedtuple("MatchTuple", ["name", "score"])
 
 
 @app.middleware("http")
@@ -117,7 +125,7 @@ def process_csv(names_storage: List[str]):
     try:
         # Store embedded vectors for semantic search
         for name in names_storage:
-            vector = embedder.embed(name)
+            vector = pca(name)
             vec_db.store(vector, {"name": name})
 
         app.names_storage = names_storage
@@ -141,24 +149,29 @@ async def search(query: str, k: int = 5):
 
     # Fuzzy search
     fuzzy_matches = app.fuzzy_matcher.get_top_k_matches(query, k)
-
     # Semantic search
-    query_vector = embedder.embed(query)
+
+    query_vector = pca(query)
 
     semantic_matches = vec_db.find_closest(query_vector, k)
+    semantic_matches: List[MatchTuple] = [
+        MatchTuple(name=m.payload["name"], score=m.score) for m in semantic_matches
+    ]
 
     tags_has_synonym_lists: List[List[str]] = [
-        app.tag_synonyms[m.payload["name"]]
-        for m in semantic_matches
-        if m.payload["name"] in app.tag_synonyms
+        app.tag_synonyms[m.name] for m in semantic_matches if m.name in app.tag_synonyms
     ]
+
+    semantic_matches = filter(
+        lambda m: m.name not in app.tag_synonyms, semantic_matches
+    )
 
     tags_has_synonym: List[str] = []
 
     for tag_list in tags_has_synonym_lists:
         tags_has_synonym += tag_list
 
-    query_vecs_has_synonyms = [embedder.embed(query) for query in tags_has_synonym]
+    query_vecs_has_synonyms = [pca(query) for query in tags_has_synonym]
 
     syn_sem_matches_lists = [
         vec_db.find_closest(tag, k) for tag in query_vecs_has_synonyms
@@ -168,22 +181,26 @@ async def search(query: str, k: int = 5):
     for matches in syn_sem_matches_lists:
         syn_sem_matches += matches
 
-    syn_sem_matches = [
-        (match.payload["name"], match.score) for match in syn_sem_matches
+    syn_sem_matches: List[MatchTuple] = [
+        MatchTuple(name=match.payload["name"], score=match.score)
+        for match in syn_sem_matches
     ]
 
-    syn_sem_matches.sort(key=lambda t: t[1], reverse=True)
+    syn_sem_matches += semantic_matches
+    syn_sem_matches.sort(key=lambda t: t.score, reverse=True)
 
     result = []
     seen = set()
 
     for tpl in syn_sem_matches:
-        if tpl[0] not in seen:
+        if tpl.name not in seen:
             result.append(tpl)
-            seen.add(tpl[0])
+            seen.add(tpl.name)
 
     # Formatting the response
-    semantic_results = [{"name": match[0], "score": match[1]} for match in result]
+    semantic_results = [
+        {"name": match.name, "score": match.score} for match in result[:k]
+    ]
 
     typo_results = [
         {"name": match["matched"], "score": match["score"]} for match in fuzzy_matches
