@@ -1,21 +1,19 @@
 import io
 import logging
 import os
-import pickle
 import threading
 from collections import defaultdict
-from typing import List
+from typing import List, Tuple
 
 import pandas as pd
-from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
-                     UploadFile)
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
 from sklearn.decomposition import PCA
 
 from tagmatch.fuzzysearcher import FuzzyMatcher
 from tagmatch.logging_config import setup_logging
-from tagmatch.vec_db import Embedder, VecDB
+from tagmatch.vec_db import Embedder, EmbedReduce, PCAEmbedReduce, VecDB
 
 if not os.path.exists("./data"):
     os.makedirs("./data")
@@ -45,7 +43,9 @@ app.tag_synonyms = defaultdict(set)
 
 # Placeholder for the semantic search components
 embedder = Embedder(model_name=settings.model_name, cache_dir=settings.cache_dir)
-pca: PCA = pickle.load(open("pca.pkl", "rb"))
+
+embed = EmbedReduce(embedder=embedder)
+pca = PCAEmbedReduce(embedder=embedder, pca_pkl_path="pca.pkl")
 
 vec_db = VecDB(
     host=settings.qdrant_host,
@@ -123,9 +123,8 @@ def process_csv(names_storage: List[str]):
     try:
         # Store embedded vectors for semantic search
         for name in names_storage:
-            vector = embedder.embed(name)
-            reduced_vector = pca.transform(vector)
-            vec_db.store(reduced_vector, {"name": name})
+            vector = pca(name)
+            vec_db.store(vector, {"name": name})
 
         app.names_storage = names_storage
         app.fuzzy_matcher = FuzzyMatcher(app.names_storage)
@@ -150,24 +149,25 @@ async def search(query: str, k: int = 5):
     fuzzy_matches = app.fuzzy_matcher.get_top_k_matches(query, k)
     # Semantic search
 
-    query_vector = embedder.embed(query)
-    reduced_q_vector = pca.transform(list(query_vector)[0])
-    semantic_matches = vec_db.find_closest(reduced_q_vector, k)
+    query_vector = pca(query)
 
     semantic_matches = vec_db.find_closest(query_vector, k)
+    semantic_matches: List[Tuple[str, float]] = [
+        (m.payload["name"], m.score) for m in semantic_matches
+    ]
 
     tags_has_synonym_lists: List[List[str]] = [
-        app.tag_synonyms[m.payload["name"]]
-        for m in semantic_matches
-        if m.payload["name"] in app.tag_synonyms
+        app.tag_synonyms[m[0]] for m in semantic_matches if m[0] in app.tag_synonyms
     ]
+
+    semantic_matches = filter(lambda m: m[0] not in app.tag_synonyms, semantic_matches)
 
     tags_has_synonym: List[str] = []
 
     for tag_list in tags_has_synonym_lists:
         tags_has_synonym += tag_list
 
-    query_vecs_has_synonyms = [embedder.embed(query) for query in tags_has_synonym]
+    query_vecs_has_synonyms = [pca(query) for query in tags_has_synonym]
 
     syn_sem_matches_lists = [
         vec_db.find_closest(tag, k) for tag in query_vecs_has_synonyms
@@ -181,6 +181,7 @@ async def search(query: str, k: int = 5):
         (match.payload["name"], match.score) for match in syn_sem_matches
     ]
 
+    syn_sem_matches += semantic_matches
     syn_sem_matches.sort(key=lambda t: t[1], reverse=True)
 
     result = []
@@ -192,7 +193,7 @@ async def search(query: str, k: int = 5):
             seen.add(tpl[0])
 
     # Formatting the response
-    semantic_results = [{"name": match[0], "score": match[1]} for match in result]
+    semantic_results = [{"name": match[0], "score": match[1]} for match in result[:k]]
 
     typo_results = [
         {"name": match["matched"], "score": match["score"]} for match in fuzzy_matches
