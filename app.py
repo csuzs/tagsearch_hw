@@ -6,11 +6,9 @@ from collections import defaultdict, namedtuple
 from typing import List
 
 import pandas as pd
-from fastapi import (BackgroundTasks, FastAPI, File, HTTPException, Request,
-                     UploadFile)
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
-from sklearn.decomposition import PCA
 
 from tagmatch.fuzzysearcher import FuzzyMatcher
 from tagmatch.logging_config import setup_logging
@@ -28,6 +26,7 @@ class Settings(BaseSettings):
     qdrant_host: str
     qdrant_port: int
     qdrant_collection: str
+    embed_dim: str
     reduced_embed_dim: int
 
     class Config:
@@ -46,13 +45,13 @@ app.tag_synonyms = defaultdict(set)
 embedder = Embedder(model_name=settings.model_name, cache_dir=settings.cache_dir)
 
 embed = EmbedReduce(embedder=embedder)
-pca = PCAEmbedReduce(embedder=embedder, pca_pkl_path="pca.pkl")
+# pca = PCAEmbedReduce(embedder=embedder, pca_pkl_path="pca.pkl")
 
 vec_db = VecDB(
     host=settings.qdrant_host,
     port=settings.qdrant_port,
     collection=settings.qdrant_collection,
-    vector_size=settings.reduced_embed_dim,
+    vector_size=settings.embed_dim,
 )
 
 app.fuzzy_matcher = FuzzyMatcher([])
@@ -125,7 +124,7 @@ def process_csv(names_storage: List[str]):
     try:
         # Store embedded vectors for semantic search
         for name in names_storage:
-            vector = pca(name)
+            vector = embed(name)
             vec_db.store(vector, {"name": name})
 
         app.names_storage = names_storage
@@ -151,7 +150,7 @@ async def search(query: str, k: int = 5):
     fuzzy_matches = app.fuzzy_matcher.get_top_k_matches(query, k)
     # Semantic search
 
-    query_vector = pca(query)
+    query_vector = embed(query)
 
     semantic_matches = vec_db.find_closest(query_vector, k)
     semantic_matches: List[MatchTuple] = [
@@ -171,7 +170,7 @@ async def search(query: str, k: int = 5):
     for tag_list in tags_has_synonym_lists:
         tags_has_synonym += tag_list
 
-    query_vecs_has_synonyms = [pca(query) for query in tags_has_synonym]
+    query_vecs_has_synonyms = [embed(query) for query in tags_has_synonym]
 
     syn_sem_matches_lists = [
         vec_db.find_closest(tag, k) for tag in query_vecs_has_synonyms

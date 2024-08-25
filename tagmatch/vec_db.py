@@ -1,32 +1,78 @@
+import pickle
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.http.models import (CollectionInfo, Distance,
-                                       FieldCondition, Filter, MatchValue,
-                                       PointStruct, VectorParams)
+from qdrant_client.http.models import (
+    BinaryQuantization,
+    BinaryQuantizationConfig,
+    CollectionInfo,
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
+from sklearn.decomposition import PCA
 
 
 class Embedder:
 
     def __init__(self, model_name: str, cache_dir: str):
         self.embedding_model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
-        self.embedding_dim: int = list(self.embedding_model.embed("Test for dims"))[0].shape[0]
+        self.embedding_dim: int = list(self.embedding_model.embed("Test for dims"))[
+            0
+        ].shape[0]
 
     def embed(self, text: str) -> np.ndarray:
         emb_generatpor = self.embedding_model.embed(text)
         return list(emb_generatpor)[0]
 
 
+class EmbedReduce:
+    def __init__(self, embedder: Embedder) -> None:
+        self._embedder = embedder
+
+    def reduce(self, embed_vector: np.ndarray) -> np.ndarray:
+        return embed_vector
+
+    def __call__(self, query: str) -> np.ndarray:
+        embedding_vec = self._embedder.embed(query)
+        reduced_vec: np.ndarray = self.reduce(embedding_vec)
+        assert len(reduced_vec.shape) == 1
+        return reduced_vec
+
+
+class PCAEmbedReduce(EmbedReduce):
+    def __init__(self, embedder: Embedder, pca_pkl_path: Path) -> None:
+        super().__init__(embedder)
+        self._pca: PCA = pickle.load(open(str(pca_pkl_path), "rb"))
+
+    def reduce(self, embed_vector: np.ndarray) -> np.ndarray:
+        reduced_vector = self._pca.transform([embed_vector])
+        return reduced_vector[0]
+
+
 class VecDB:
     _ALLOWED_DISTANCES = ("cosine", "euclidean")
 
-    def __init__(self, host: str, port: int, collection: str, vector_size: int, distance: str = "cosine"):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        collection: str,
+        vector_size: int,
+        distance: str = "cosine",
+    ):
         if distance not in self._ALLOWED_DISTANCES:
-            raise ValueError(f"Distance {distance} not allowed. Allowed distances are {self._ALLOWED_DISTANCES}")
+            raise ValueError(
+                f"Distance {distance} not allowed. Allowed distances are {self._ALLOWED_DISTANCES}"
+            )
 
         self.distance = distance
         self.client = QdrantClient(host, port=int(port))
@@ -34,7 +80,7 @@ class VecDB:
         self.vector_size = vector_size
 
         if not self.collection_exists():
-            self._create_collection
+            self._create_collection()
 
     def collection_exists(self) -> bool:
         try:
@@ -45,8 +91,15 @@ class VecDB:
 
     def _create_collection(self):
         dist = Distance.COSINE if self.distance == "cosine" else Distance.EUCLID
-        self.client.create_collection(self.collection,
-                                      vectors_config=VectorParams(size=self.vector_size, distance=dist))
+        self.client.create_collection(
+            self.collection,
+            vectors_config=VectorParams(size=self.vector_size, distance=dist),
+            quantization_config=BinaryQuantization(
+                binary=BinaryQuantizationConfig(
+                    always_ram=True,
+                ),
+            ),
+        )
 
     def remove_collection(self):
         self.client.delete_collection(self.collection)
@@ -55,14 +108,19 @@ class VecDB:
         vec_list: List[float] = vector.tolist()
         # query_filter = Filter(must=[FieldCondition(key="is_accepted_tag", match=MatchValue(value=True))])
         query_filter = None
-        res = self.client.search(self.collection, query_vector=vec_list, limit=k, query_filter=query_filter)
+        res = self.client.search(
+            self.collection, query_vector=vec_list, limit=k, query_filter=query_filter
+        )
         return res
 
     def store(self, vector: np.ndarray, payload: Dict[str, Any]) -> bool:
         vec_list: List[float] = vector.tolist()
         rnd_id = uuid.uuid4().int & (1 << 64) - 1
         try:
-            self.client.upsert(self.collection, points=[PointStruct(id=rnd_id, vector=vec_list, payload=payload)])
+            self.client.upsert(
+                self.collection,
+                points=[PointStruct(id=rnd_id, vector=vec_list, payload=payload)],
+            )
             return True
         except Exception:
             return False
