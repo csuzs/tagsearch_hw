@@ -1,6 +1,9 @@
 # Word Embedding vector dimension reduction
 Qdrant had a nice summary on quantization methods for its DB, i've used Binary Quantization.
-Recall was used as the main metric
+Recall was used as the main metric in that article.
+https://qdrant.tech/documentation/guides/quantization/
+
+It would be nice to write a script measuring the change of recommended results made with the quantization method compared to the original one functioning as GT.
 
 # UI
 synonym uses tags from create_dummy_tag.py file, it should be loaded once the dropdown list was selected, but wasn't familiar enough with gradio library to achieve that
@@ -10,7 +13,7 @@ Unit tests for synonym functionality could be useful
 
 # Maintenance
 
-In case of supervised dimension reduction techniques one should re-train the dimension reduction method if new tags would be added
+In case of supervised dimension reduction techniques one shoulsd re-train the dimension reduction method if new tags would be added
 
 # Additional comments
 
