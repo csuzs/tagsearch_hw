@@ -1,5 +1,6 @@
 # Word Embedding vector dimension reduction
-I wanted to explore dimensionality reduction methods that retain the distances of the embedding vectors, i'm pretty sure there are better methods to use (eg autoencoder with modified loss on the bottleneck)
+Qdrant had a nice summary on quantization methods for its DB, i've used Binary Quantization.
+Recall was used as the main metric
 
 # UI
 synonym uses tags from create_dummy_tag.py file, it should be loaded once the dropdown list was selected, but wasn't familiar enough with gradio library to achieve that
